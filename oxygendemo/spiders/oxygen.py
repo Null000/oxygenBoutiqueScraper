@@ -73,11 +73,12 @@ class OxygenSpider(CrawlSpider):
             if len(self.jewelry_urls_remaining) == 0:
                 # all jewelery done, adding the rest of accessories
                 yield Request(self.accessories_url)
-            self.logger.info(self.urls_before_designers_remaining)
             if len(self.urls_before_designers_remaining) == 0:
                 # all items by type done, adding designers
-                #TODO extract designer urls
-                pass
+                for href in response.xpath('//ul[@id="ctl00_ulDesigners"]//a/@href'):
+                    new_url = response.urljoin(href.extract())
+                    new_url = urllib.unquote(new_url) + '?ViewAll=1'
+                    yield Request(new_url)
         else:
             # log these so you can figure out what not to follow
             self.logger.info('not checking: %s', response.url)
@@ -106,7 +107,8 @@ class OxygenSpider(CrawlSpider):
         #     - 'B' bags
         #     - 'J' jewelry
         #     - 'R' accessories
-        item['type'] = response.request.meta['lystType']  # TODO check request meta
+        if 'lystType' in response.request.meta.keys():
+            item['type'] = response.request.meta['lystType']
 
         # - gender, one of:
         # - 'F' female
@@ -126,13 +128,13 @@ class OxygenSpider(CrawlSpider):
         # - description - fuller description and details of the item
         # text of the element after the one with "Description" text
 
-        bla = [x for x in root('#accordion').children().items()]
+        dropdowns = [x for x in root('#accordion').children().items()]
         i = 0
-        for i in range(len(bla)):
-            if bla[i].text().strip() == 'Description':
+        for i in range(len(dropdowns)):
+            if dropdowns[i].text().strip() == 'Description':
                 break
 
-        item['description'] = bla[i + 1].text().strip()
+        item['description'] = dropdowns[i + 1].text().strip()
 
         # - raw_color - best guess of what colour the item is (can be blank if unidentifiable)
         # - image_urls - list of urls of large images representing the item
