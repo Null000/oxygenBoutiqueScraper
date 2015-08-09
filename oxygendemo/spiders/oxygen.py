@@ -1,35 +1,83 @@
+import urllib
 from scrapy import Request
 from scrapy.contrib.spiders import CrawlSpider
-
 from oxygendemo.items import OxygendemoItem
-
 import pyquery
 
 
 class OxygenSpider(CrawlSpider):
     name = "oxygenboutique.com"
     allowed_domains = ["oxygenboutique.com"]
-    start_urls = ['http://www.oxygenboutique.com/Mini-Bella-Ear-Jacket-Gold.aspx',  # DEVEL for testing
-                  'http://www.oxygenboutique.com'
-                  ]
+
+    # ?ViewAll=1 is added to show all items on one page
+    clothes_url = 'http://www.oxygenboutique.com/clothing.aspx?ViewAll=1'
+    shoes_url = 'http://www.oxygenboutique.com/Shoes-All.aspx?ViewAll=1'
+
+    jewelry_urls = ['http://www.oxygenboutique.com/earrings.aspx?ViewAll=1',
+                    'http://www.oxygenboutique.com/ring.aspx?ViewAll=1',
+                    'http://www.oxygenboutique.com/necklace.aspx?ViewAll=1']
+    accessories_url = 'http://www.oxygenboutique.com/accessories-all.aspx?ViewAll=1'
+
+    start_urls = [clothes_url, shoes_url] + jewelry_urls
+
+    jewelry_urls_remaining = set(jewelry_urls)
+    urls_before_designers_remaining = set(start_urls + [accessories_url])
+
+    visited_urls = set()
+
+    urls_with_type = {
+        clothes_url: 'A',
+        shoes_url: 'S',
+        accessories_url: 'R'
+    }
+    for url in jewelry_urls:
+        urls_with_type[url] = 'J'
 
     def parse(self, response):
+        url = response.url
+        url = urllib.unquote(url)
+
+        self.visited_urls.add(url)
+        if url in self.jewelry_urls_remaining:
+            self.jewelry_urls_remaining.remove(url)
+        if url in self.urls_before_designers_remaining:
+            self.urls_before_designers_remaining.remove(url)
         # if we can't use it, we ended up somewhere strange
+        # TODO shouldn't be needed in the final version
         if self.can_use_xpath(response):
-            self.logger.info('checking: %s', response.url)
+            self.logger.info('checking: %s', url)
+
             if self.is_product_page(response):
                 yield self.parse_item(response)
+            else:
+                for href in response.xpath('//div[@id="container"]//div[@class="DataContainer"]//a/@href'):
+                    new_url = response.urljoin(href.extract())
+                    new_url = urllib.unquote(new_url)
 
-            for href in response.xpath("//a/@href"):
-                url = response.urljoin(href.extract())
-                # don't go scraping javascript: links
-                # TODO filter images and other obviously wrong files
-                if url.startswith("http")\
-                        and not url.startswith('http://www.oxygenboutique.com/SearchResults.aspx?') \
-                        and not url.startswith('https://www.oxygenboutique.com/SearchResults.aspx?') \
-                        and not url.startswith('http://www.oxygenboutique.com/GetImage/') \
-                        and not url.startswith('https://www.oxygenboutique.com/GetImage/'):
-                    yield Request(url)
+                    if new_url not in self.visited_urls:
+                        if url in self.jewelry_urls:
+                            self.jewelry_urls_remaining.add(new_url)
+                        self.urls_before_designers_remaining.add(new_url)
+
+                        # # don't go scraping javascript: links
+                        # # TODO filter images and other obviously wrong files
+                        # if url.startswith("http") \
+                        #         and not url.startswith('http://www.oxygenboutique.com/SearchResults.aspx?') \
+                        #         and not url.startswith('https://www.oxygenboutique.com/SearchResults.aspx?') \
+                        #         and not url.startswith('http://www.oxygenboutique.com/GetImage/') \
+                        #         and not url.startswith('https://www.oxygenboutique.com/GetImage/'):
+                        new_request = Request(new_url)
+                        if url in self.urls_with_type.keys():
+                            new_request.meta['lystType'] = self.urls_with_type[url]
+                        yield new_request
+            if len(self.jewelry_urls_remaining) == 0:
+                # all jewelery done, adding the rest of accessories
+                yield Request(self.accessories_url)
+            self.logger.info(self.urls_before_designers_remaining)
+            if len(self.urls_before_designers_remaining) == 0:
+                # all items by type done, adding designers
+                #TODO extract designer urls
+                pass
         else:
             # log these so you can figure out what not to follow
             self.logger.info('not checking: %s', response.url)
@@ -58,7 +106,7 @@ class OxygenSpider(CrawlSpider):
         #     - 'B' bags
         #     - 'J' jewelry
         #     - 'R' accessories
-        item['type'] = 'A'  # TODO check request meta
+        item['type'] = response.request.meta['lystType']  # TODO check request meta
 
         # - gender, one of:
         # - 'F' female
@@ -84,7 +132,7 @@ class OxygenSpider(CrawlSpider):
             if bla[i].text().strip() == 'Description':
                 break
 
-        item['description'] = bla[i+1].text().strip()
+        item['description'] = bla[i + 1].text().strip()
 
         # - raw_color - best guess of what colour the item is (can be blank if unidentifiable)
         # - image_urls - list of urls of large images representing the item
